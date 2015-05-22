@@ -1,0 +1,165 @@
+---
+title : "Qualitative prediction to the Weight Lifting Exercises Dataset"
+subtitle : "Practical Machine Learning Project"
+author: "Mohammed Derouich"
+date  : "May 21th, 2015"
+---
+
+##Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website [here](http://groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).
+
+##Getting and exploration Data
+
+The Weight Lifting Exercises (WLE) dataset is used to investigate how well an activity is being performed. Six participants were performing one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions:
+
+Class A - exactly according to the specification
+
+Class B - throwing the elbows to the front
+
+Class C - lifting the dumbbell only halfway
+
+Class D - lowering the dumbbell only halfway
+
+Class E - throwing the hips to the front.
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.
+
+We get the Data from these links:
+
+* https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv for training data
+
+*  https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv for testing data
+
+
+````{r}
+training <- read.table("./pml-training.csv", sep=","
+                       , header=TRUE)
+testing <- read.table("./pml-testing.csv", sep=",",
+                      header=TRUE)
+````
+
+````{r}
+dim(training)
+dim(testing)
+````
+
+````{r}
+str(training$classe)
+summary(training$classe)
+````
+
+The training dataset comes with 19622 observations of 160 variables. The outcome is the variable "classe". regarding to the definition of the barlift fashion we will focuse on raw variables that describe the movement in all directions. For this we will use the  x, y, and z values + euler angles (roll, pitch and yaw) + accelerometer and gyroscope, and magnetometer.
+
+We estimate that with this group of variables we could identify the "classe" of every exercise.
+
+````{r}
+predictorId <- c(grep("^accel", names(training)), 
+                  grep("^gyros", names(training)), 
+                  grep("^magnet", names(training)), 
+                  grep("^roll", names(training)), 
+                  grep("^pitch", names(training)), 
+                  grep("^yaw", names(training)),
+                  grep("^total", names(training)))
+trainPredSet <- training[, c(predictorId, 160)]
+testPredSet <- testing[, c(predictorId, 160)]
+length(predictorId)
+````
+
+The included predictors in the prediction model are listed below. None of them shows a zero or near zero variance which would help to identify candidates for further reducing the set of predictors.
+````{r}
+library(caret)
+nearZeroVar(trainPredSet[, -53], saveMetric = TRUE)
+````
+
+We do some plots, for example about roll axis, but these dont show any direct correlation between "classe" and variables taken separately. That makes us think that the combination of a number of variables could identify the "classe". That is why we will use the random forest model.
+
+````{r}
+par(mfrow = c(2,2))
+boxplot(trainPredSet[, "roll_belt"] ~ trainPredSet$classe, 
+    col = c("red","green","sienna","palevioletred1","royalblue2"),
+    main = "roll_belt")
+boxplot(trainPredSet[, "roll_arm"] ~ trainPredSet$classe, 
+    col = c("red","green","sienna","palevioletred1","royalblue2"),
+    main = "roll_arm")
+boxplot(trainPredSet[, "roll_dumbbell"] ~ trainPredSet$classe, 
+    col = c("red","green","sienna","palevioletred1","royalblue2"),
+    main = "roll_dumbbell")
+boxplot(trainPredSet[, "roll_forearm"] ~ trainPredSet$classe, 
+    col = c("red","green","sienna","palevioletred1","royalblue2"),
+    main = "roll_forearm")
+````
+
+
+##Model Training and Cross-Validation
+
+The dataset is splitted into training and validation set using 75%-25% of the original dataset, respectively. The training set is the one that is used during model training.
+
+````{r}
+set.seed(13221)
+inTrain <- createDataPartition(trainPredSet$classe, p = 0.75, list = FALSE)
+train <- trainPredSet[inTrain, ]
+validation <- trainPredSet[-inTrain, ]
+````
+
+For this task, we decided to use Random Forests as the model of choice. First, we trained a model using all 53 variables.
+
+````{r}
+library(randomForest)
+model.RF <- randomForest(classe ~ ., 
+                         data = train,
+                         ntree = 20)
+````
+
+Then, we perform cross-validation to determine the appropriate number of variables to consider for model training.
+
+`````{r}
+result <- rfcv(trainx = train[ , -53], trainy = train[ , 53], ntree = 20)
+with(result, plot(n.var, 
+                  error.cv, 
+                  log = "x", 
+                  type = "o", 
+                  lwd = 2, 
+                  xlab = "Number of variables", 
+                  ylab = "CV Error"))
+````
+
+From the plot above, the cross-validation error indicates that only the top 24 variables (ranked using the mean decrease in Gini coefficient) are required to produce a good model. Such variables are shown below:
+
+````{r}
+varImpPlot(model.RF, n.var = 24)
+````
+
+We re-train our model using these top variables.
+
+````{r}
+variables <- varImp(model.RF)
+top.names <- rownames(variables)[order(variables, decreasing = TRUE)][1:24]
+
+model.RF.top <- randomForest(x = train[ , top.names],
+                             y = train$classe,
+                             ntree = 20)
+````
+
+Once the model is trained, we check its performance using the validation set.
+
+````{r}
+pred <- predict(model.RF.top, validation)
+confusionMatrix(pred, validation$classe)
+````
+
+The trained model has an accuracy of 99.2% with a 95% confidence interval of (98.91%, 99.43%) in the validation set. The out-of-sample error is of 0.8%.
+
+##Prediction Results on Test Dataset
+
+When using the described prediction model to predict the 20 different test cases from the original test dataset testing we obtain the following predictions:
+
+````{r}
+testPrediction <- predict(model.RF.top, newdata = testPredSet)
+print(rbind(testing[1:20, 160], as.character(testPrediction)))
+````
+
+##Summary
+
+After submission the 20-results on Coursera.org, we obtain 20/20 correct response ! 
+We have, here, 100% success due to small number of test 20 and higher accuracy 99.2 % of our model. That means we won't obtain 100% every time, especially when the number of test increases. However we still stay around the 99.2%, which is a very good score.
